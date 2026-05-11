@@ -16,6 +16,8 @@ const leaveRoutes        = require('./routes/leaveRoutes');
 const chatRoutes         = require('./routes/chatRoutes');
 const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes    = require('./routes/dashboardRoutes');
+const imagekitRoutes     = require('./routes/imagekitRoutes');  // ← NEW
+const taskRoutes         = require('./routes/taskRoutes');
 
 // Cron job
 require('./jobs/markAbsent');
@@ -33,7 +35,7 @@ app.use(cors({
 
 // ── Rate limiting on auth routes only ───────────────────────
 const authLimiter = rateLimit({
-  windowMs: 15 * 60 * 1000, // 15 minutes
+  windowMs: 15 * 60 * 1000,
   max: 20,
   message: { error: 'Too many login attempts. Please try again in 15 minutes.' },
   standardHeaders: true,
@@ -41,6 +43,8 @@ const authLimiter = rateLimit({
 });
 
 // ── Body parsing ─────────────────────────────────────────────
+// express.json() is now sufficient for all routes.
+// multer is no longer needed at the server level.
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
@@ -52,7 +56,8 @@ app.use('/api/leaves',        leaveRoutes);
 app.use('/api/chat',          chatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard',     dashboardRoutes);
-
+app.use('/api/imagekit',      imagekitRoutes);   // ← NEW
+app.use('/api/tasks',         taskRoutes);
 // ── Health check ─────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok', app: 'AttendX API' }));
 

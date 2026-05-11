@@ -105,16 +105,17 @@ CREATE TABLE public.users (
   phone               TEXT,
   join_date           DATE,
   avatar_initials     TEXT,
-  total_leaves        INT         NOT NULL DEFAULT 24,
-  used_leaves         INT         NOT NULL DEFAULT 0,
+  profile_photo_url   TEXT,         -- ImageKit CDN URL for profile photo
+  paid_leaves_total   INT         NOT NULL DEFAULT 24,
+  paid_leaves_used    INT         NOT NULL DEFAULT 0,
   monthly_salary      NUMERIC(12, 2),
   must_reset_password BOOLEAN     NOT NULL DEFAULT TRUE,
   is_active           BOOLEAN     NOT NULL DEFAULT TRUE,
   created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
-  CONSTRAINT chk_used_leaves  CHECK (used_leaves >= 0),
-  CONSTRAINT chk_total_leaves CHECK (total_leaves >= 0)
+  CONSTRAINT chk_paid_leaves_used  CHECK (paid_leaves_used >= 0),
+  CONSTRAINT chk_paid_leaves_total CHECK (paid_leaves_total >= 0)
 );
 
 CREATE TRIGGER trg_users_updated_at

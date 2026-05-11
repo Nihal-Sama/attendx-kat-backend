@@ -2,13 +2,13 @@
 //  userController.js
 // ============================================================
 const supabase = require('../supabaseClient');
-
+const imagekit = require('../imagekitClient');
 // ── GET /api/users — list all active users ───────────────────
 async function listUsers(req, res) {
   try {
     const { data, error } = await supabase
       .from('users')
-      .select('id, name, email, role, designation, department, phone, join_date, avatar_initials, total_leaves, used_leaves, is_active, created_at')
+      .select('id, name, email, role, designation, department, phone, join_date, avatar_initials, paid_leaves_total, paid_leaves_used, is_active, created_at')
       .eq('is_active', true)
       .order('name');
 
@@ -25,7 +25,7 @@ async function createUser(req, res) {
   try {
     const {
       name, email, role = 'employee', designation, department,
-      phone, join_date, monthly_salary, total_leaves = 24,
+      phone, join_date, monthly_salary, paid_leaves_total = 24,
     } = req.body;
 
     if (!name || !email) {
@@ -43,9 +43,9 @@ async function createUser(req, res) {
     const DEFAULT_PASSWORD = 'Attendx@123';
     const { data: authData, error: authError } = await supabase.auth.admin.createUser({
       email,
-      password:       DEFAULT_PASSWORD,
-      email_confirm:  true,               // skip email verification
-      user_metadata:  { name, role, designation, department, avatar_initials },
+      password: DEFAULT_PASSWORD,
+      email_confirm: true,               // skip email verification
+      user_metadata: { name, role, designation, department, avatar_initials },
     });
 
     if (authError) {
@@ -60,7 +60,7 @@ async function createUser(req, res) {
     const { data: profile, error: dbError } = await supabase
       .from('users')
       .insert({
-        id:              authData.user.id,
+        id: authData.user.id,
         name,
         email,
         role,
@@ -70,7 +70,7 @@ async function createUser(req, res) {
         join_date,
         avatar_initials,
         monthly_salary,
-        total_leaves,
+        paid_leaves_total,
         must_reset_password: true,
       })
       .select()
@@ -84,7 +84,7 @@ async function createUser(req, res) {
 
     res.status(201).json({
       message: `Account created. Employee must change password on first login.`,
-      user:    profile,
+      user: profile,
     });
   } catch (err) {
     console.error('[userController.createUser]', err);
@@ -136,11 +136,11 @@ async function updateUser(req, res) {
     }
 
     // Fields employees are allowed to update on their own profile
-    const allowedForSelf   = ['phone', 'designation'];
+    const allowedForSelf = ['phone', 'designation'];
     // Fields only admin/ceo can change
-    const allowedForAdmin  = [
+    const allowedForAdmin = [
       'name', 'email', 'role', 'designation', 'department', 'phone',
-      'join_date', 'monthly_salary', 'total_leaves', 'avatar_initials',
+      'join_date', 'monthly_salary', 'paid_leaves_total', 'avatar_initials',
     ];
 
     const allowedFields = isAdminOrCeo ? allowedForAdmin : allowedForSelf;
@@ -194,4 +194,36 @@ async function deactivateUser(req, res) {
   }
 }
 
-module.exports = { listUsers, createUser, getUser, updateUser, deactivateUser };
+// ── PATCH /api/users/me/profile-photo ────────────────────────
+// Body (JSON): { photo_url }
+// Frontend uploads the photo directly to ImageKit and sends
+// back the resulting CDN URL. This endpoint just persists it.
+async function uploadProfilePhoto(req, res) {
+  try {
+    const { photo_url } = req.body;
+
+    if (!photo_url || !photo_url.trim()) {
+      return res.status(400).json({ error: 'photo_url is required.' });
+    }
+
+    const { data, error } = await supabase
+      .from('users')
+      .update({ profile_photo_url: photo_url })
+      .eq('id', req.user.id)
+      .select('id, name, email, role, profile_photo_url')
+      .single();
+
+    if (error) throw error;
+
+    res.status(200).json({
+      message:           'Profile photo updated successfully.',
+      profile_photo_url: data.profile_photo_url,
+      user:              data,
+    });
+  } catch (err) {
+    console.error('[userController.uploadProfilePhoto]', err);
+    res.status(500).json({ error: 'Profile photo update failed.' });
+  }
+}
+
+module.exports = { listUsers, createUser, getUser, updateUser, deactivateUser, uploadProfilePhoto };
