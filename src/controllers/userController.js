@@ -25,7 +25,7 @@ async function createUser(req, res) {
   try {
     const {
       name, email, role = 'employee', designation, department,
-      phone, join_date, monthly_salary, paid_leaves_total = 24,
+      phone, join_date, monthly_salary, paid_leaves_total = 15,
     } = req.body;
 
     if (!name || !email) {
