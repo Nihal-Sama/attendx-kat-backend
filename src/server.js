@@ -8,6 +8,23 @@ const cors        = require('cors');
 const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
 
+const requiredEnvVars = [
+  'SUPABASE_URL',
+  'SUPABASE_SERVICE_ROLE_KEY',
+  'IMAGEKIT_PUBLIC_KEY',
+  'IMAGEKIT_PRIVATE_KEY',
+  'IMAGEKIT_URL_ENDPOINT',
+];
+
+const missingEnvVars = requiredEnvVars.filter((name) => !process.env[name]);
+if (missingEnvVars.length > 0) {
+  console.error(
+    'Missing required environment variables for backend startup:',
+    missingEnvVars.join(', ')
+  );
+  process.exit(1);
+}
+
 // Route imports
 const screenshotRoutes   = require('./routes/screenshotRoutes');
 const authRoutes         = require('./routes/authRoutes');
@@ -60,7 +77,8 @@ app.use('/api/dashboard',     dashboardRoutes);
 app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/imagekit',      imagekitRoutes);   // ← NEW
 app.use('/api/tasks',         taskRoutes);
-// ── Health check ─────────────────────────────────────────────
+// ── Root / health checks ─────────────────────────────────────
+app.get('/', (_req, res) => res.json({ status: 'ok', app: 'AttendX API' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', app: 'AttendX API' }));
 
 // ── 404 handler ───────────────────────────────────────────────
