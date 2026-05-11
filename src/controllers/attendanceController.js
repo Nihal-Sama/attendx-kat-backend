@@ -19,8 +19,8 @@ const {
 // ── Office GPS anchor ─────────────────────────────────────────
 // Replace with exact coordinates from Google Maps for
 // Pakkar Tanver Leather Export before going to production.
-const OFFICE_LAT        = 13.0827;
-const OFFICE_LNG        = 80.2707;
+const OFFICE_LAT        = 13.104026;
+const OFFICE_LNG        = 80.250346;
 const GEOFENCE_METRES   = 100;
 
 // ── Haversine formula ─────────────────────────────────────────
