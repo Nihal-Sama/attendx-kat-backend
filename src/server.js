@@ -9,6 +9,7 @@ const helmet      = require('helmet');
 const rateLimit   = require('express-rate-limit');
 
 // Route imports
+const screenshotRoutes   = require('./routes/screenshotRoutes');
 const authRoutes         = require('./routes/authRoutes');
 const userRoutes         = require('./routes/userRoutes');
 const attendanceRoutes   = require('./routes/attendanceRoutes');
@@ -21,7 +22,7 @@ const taskRoutes         = require('./routes/taskRoutes');
 
 // Cron job
 require('./jobs/markAbsent');
-
+require('./jobs/deleteOldScreenshots'); 
 const app = express();
 
 // ── Security middleware ──────────────────────────────────────
@@ -56,6 +57,7 @@ app.use('/api/leaves',        leaveRoutes);
 app.use('/api/chat',          chatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard',     dashboardRoutes);
+app.use('/api/screenshots', screenshotRoutes);
 app.use('/api/imagekit',      imagekitRoutes);   // ← NEW
 app.use('/api/tasks',         taskRoutes);
 // ── Health check ─────────────────────────────────────────────
