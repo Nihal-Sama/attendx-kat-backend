@@ -2,8 +2,8 @@
 const { generativeModel } = require('../firebaseClient');
 
 /**
- * Executes a chat request via Firebase Vertex AI (Gemini).
- * * @param {string} systemInstruction - The context and rules for the AI.
+ * Executes a chat request via Google Cloud Vertex AI (Gemini).
+ * @param {string} systemInstruction - The context and rules for the AI.
  * @param {Array} history - Previous chat messages [{ role, content }].
  * @param {string} message - The new user message.
  * @param {Object} options - Configuration options (temperature, JSON mode, etc).
@@ -11,9 +11,7 @@ const { generativeModel } = require('../firebaseClient');
  */
 async function chat(systemInstruction, history = [], message, options = {}) {
   try {
-    // 1. Format the history to match Firebase's expected structure
-    // Firebase Gemini uses 'model' instead of 'assistant' for the AI role.
-    // We also slice the history to the last 10 turns to prevent token bloat.
+    // 1. Format the history to match Vertex AI's expected structure
     const formattedHistory = history.slice(-10).map(h => ({
       role: h.role === 'assistant' ? 'model' : 'user',
       parts: [{ text: h.content }]
@@ -25,7 +23,6 @@ async function chat(systemInstruction, history = [], message, options = {}) {
       systemInstruction: { parts: [{ text: systemInstruction }] },
       generationConfig: {
         temperature: options.temperature ?? 0.3,
-        // If the intent classifier calls this, enforce JSON output
         ...(options.jsonMode && {
           responseMimeType: "application/json",
           responseSchema: {
@@ -37,12 +34,19 @@ async function chat(systemInstruction, history = [], message, options = {}) {
       }
     });
 
-    // 3. Send the message and extract the text
-    const result = await chatSession.sendMessage(message);
-    return result.response.text();
+    // 3. Send the message (Cloud SDK requires an array of parts)
+    const result = await chatSession.sendMessage([{ text: message }]);
+    
+    // 4. Safely extract text from the Vertex AI payload
+    if (result.response.candidates && result.response.candidates[0].content.parts.length > 0) {
+      return result.response.candidates[0].content.parts[0].text;
+    }
+    
+    // Fallback logic
+    return result.response.text ? result.response.text() : "";
 
   } catch (error) {
-    console.error('[Firebase Gemini Service Error]:', error);
+    console.error('[Firebase Vertex AI Service Error]:', error);
     throw error;
   }
 }

@@ -1,17 +1,32 @@
-// src/firebaseClient.js
 const admin = require('firebase-admin');
-const { getVertexAI } = require('firebase-admin/vertexai');
-const serviceAccount = require('../firebase-adminsdk.json'); // Your secure key
+const { VertexAI } = require('@google-cloud/vertexai');
+const path = require('path');
+const fs = require('fs');
 
-// Initialize Firebase Admin
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount),
+// 1. Locate the Service Account Key (Securely injected by Render)
+const keyPath = path.join(__dirname, '../firebase-adminsdk.json');
+
+if (!fs.existsSync(keyPath)) {
+  console.error('🚨 Missing required Firebase Service Account key (firebase-adminsdk.json)');
+  process.exit(1);
+}
+
+const serviceAccount = require(keyPath);
+
+// 2. Initialize Firebase Admin (for Auth, Database, etc.)
+if (!admin.apps.length) {
+  admin.initializeApp({
+    credential: admin.credential.cert(serviceAccount),
+  });
+}
+
+// 3. Initialize the dedicated Server-Side Vertex AI SDK
+const vertexAI = new VertexAI({
+  project: serviceAccount.project_id,
+  location: 'us-central1', // Default region for Gemini 1.5 Flash
+  keyFilename: keyPath
 });
 
-// Initialize the Gemini model via Firebase Vertex AI
-const vertexAI = getVertexAI(admin.app());
-
-// We use gemini-1.5-flash as it is the fastest for chatbot use cases
 const generativeModel = vertexAI.getGenerativeModel({
   model: 'gemini-1.5-flash',
   generationConfig: {
