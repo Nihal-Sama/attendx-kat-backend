@@ -13,8 +13,8 @@ async function getMessages(req, res) {
     const { data, error, count } = await supabase
       .from('messages')
       .select(`
-        id, text, is_deleted, sent_at,
-        users ( id, name, avatar_initials, role )
+        id, text, is_deleted, sent_at, user_id,
+        users ( id, name, avatar_initials, role, profile_photo_url )
       `, { count: 'exact' })
       .eq('is_deleted', false)
       .order('sent_at', { ascending: true })
@@ -40,13 +40,12 @@ async function sendMessage(req, res) {
       .from('messages')
       .insert({ user_id: req.user.id, text: text.trim() })
       .select(`
-        id, text, is_deleted, sent_at,
-        users ( id, name, avatar_initials, role )
+        id, text, is_deleted, sent_at, user_id,
+        users ( id, name, avatar_initials, role, profile_photo_url )
       `)
       .single();
 
     if (error) throw error;
-    // Supabase Realtime broadcasts this INSERT to all subscribers automatically
     res.status(201).json({ message: data });
   } catch (err) {
     console.error('[chatController.sendMessage]', err);
@@ -60,7 +59,6 @@ async function deleteMessage(req, res) {
     const { id } = req.params;
     const isAdminOrCeo = ['admin', 'ceo'].includes(req.user.role);
 
-    // Fetch to verify ownership
     const { data: msg, error: fetchError } = await supabase
       .from('messages')
       .select('id, user_id')
