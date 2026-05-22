@@ -3,6 +3,7 @@
 // ============================================================
 const supabase = require('../supabaseClient');
 
+
 // ── GET /api/chat/messages?page=1&limit=50 ───────────────────
 async function getMessages(req, res) {
   try {
@@ -16,12 +17,22 @@ async function getMessages(req, res) {
         id, text, is_deleted, sent_at, user_id,
         users ( id, name, avatar_initials, role, profile_photo_url )
       `, { count: 'exact' })
-      .eq('is_deleted', false)
-      .order('sent_at', { ascending: true })
+      // Removed the is_deleted filter to allow tombstone rendering
+      // Changed to false to fetch the newest messages first
+      .order('sent_at', { ascending: false }) 
       .range(offset, offset + limit - 1);
 
     if (error) throw error;
-    res.status(200).json({ messages: data, total: count, page, limit });
+
+    // Scrub the actual text of deleted messages on the server side for security
+    const secureData = data.map(msg => {
+      if (msg.is_deleted) {
+        msg.text = "This message was deleted"; 
+      }
+      return msg;
+    });
+
+    res.status(200).json({ messages: secureData, total: count, page, limit });
   } catch (err) {
     console.error('[chatController.getMessages]', err);
     res.status(500).json({ error: 'Failed to fetch messages.' });
