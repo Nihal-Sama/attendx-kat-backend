@@ -52,7 +52,13 @@ function geofenceError(lat, lng) {
   return null;
 }
 
-const today = () => new Date().toISOString().split('T')[0];
+// Fixed — IST based, consistent with screenshotController.js
+const today = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year:     'numeric',
+  month:    '2-digit',
+  day:      '2-digit',
+}).format(new Date());
 
 
 // ── POST /api/attendance/checkin ─────────────────────────────
@@ -366,13 +372,30 @@ async function getToday(req, res) {
   try {
     const { data, error } = await supabase
       .from('attendance')
-      .select('*')
+      .select(`
+        *,
+        breaks (
+          id,
+          break_start,
+          break_end
+        )
+      `)
       .eq('user_id', req.user.id)
       .eq('date', today())
       .maybeSingle();
 
     if (error) throw error;
-    res.status(200).json({ attendance: data });
+
+    // Find any open break (no break_end)
+    const openBreak = (data?.breaks || []).find(b => !b.break_end) || null;
+
+    const attendance = data ? {
+      ...data,
+      break_start_time: openBreak?.break_start ?? null,
+      break_end_time:   openBreak?.break_end   ?? null,
+    } : null;
+
+    res.status(200).json({ attendance });
   } catch (err) {
     console.error('[attendanceController.getToday]', err);
     res.status(500).json({ error: "Failed to fetch today's record." });

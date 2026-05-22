@@ -8,7 +8,13 @@ const supabase = require('../supabaseClient');
 cron.schedule('55 23 * * 1-5', async () => {
   console.log('[cron] Running nightly absent-marking job...');
 
-  const today = new Date().toISOString().split('T')[0]; // YYYY-MM-DD
+  // Fixed — IST based, consistent with screenshotController.js
+  const today = () => new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Kolkata',
+    year:     'numeric',
+    month:    '2-digit',
+    day:      '2-digit',
+  }).format(new Date());
 
   try {
     // 1. Get all active employees

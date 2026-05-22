@@ -36,6 +36,7 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const dashboardRoutes    = require('./routes/dashboardRoutes');
 const imagekitRoutes     = require('./routes/imagekitRoutes');  // ← NEW
 const taskRoutes         = require('./routes/taskRoutes');
+const chatbotRoutes      = require('./routes/chatbotRoutes');
 
 // Cron job
 require('./jobs/markAbsent');
@@ -87,9 +88,10 @@ app.use('/api/leaves',        leaveRoutes);
 app.use('/api/chat',          chatRoutes);
 app.use('/api/notifications', notificationRoutes);
 app.use('/api/dashboard',     dashboardRoutes);
-app.use('/api/screenshots', screenshotRoutes);
+app.use('/api/screenshots',   screenshotRoutes);
 app.use('/api/imagekit',      imagekitRoutes);   // ← NEW
 app.use('/api/tasks',         taskRoutes);
+app.use('/api/chatbot',       chatbotRoutes);
 // ── Root / health checks ─────────────────────────────────────
 app.get('/', (_req, res) => res.json({ status: 'ok', app: 'AttendX API' }));
 app.get('/health', (_req, res) => res.json({ status: 'ok', app: 'AttendX API' }));

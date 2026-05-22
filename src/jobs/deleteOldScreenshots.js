@@ -17,7 +17,12 @@ cron.schedule('0 2 * * *', async () => {
     // Calculate cutoff date — 90 days ago
     const cutoff = new Date();
     cutoff.setDate(cutoff.getDate() - 90);
-    const cutoffStr = cutoff.toISOString().split('T')[0];
+    const cutoffStr = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Kolkata',
+      year:     'numeric',
+      month:    '2-digit',
+      day:      '2-digit',
+    }).format(cutoff);
 
     // Fetch all screenshot records older than 90 days
     const { data: oldScreenshots, error: fetchError } = await supabase

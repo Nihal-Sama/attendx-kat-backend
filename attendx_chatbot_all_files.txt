@@ -1,0 +1,590 @@
+================================================================
+FILE: src/routes/chatbotRoutes.js
+================================================================
+
+const express           = require('express');
+const { requireAuth }   = require('../middleware/auth');
+const { sendMessage }   = require('../controllers/chatbotController');
+
+const router = express.Router();
+
+router.post('/message', requireAuth, sendMessage);
+
+module.exports = router;
+
+
+================================================================
+FILE: src/services/qwenService.js
+================================================================
+
+const QWEN_BASE_URL = process.env.QWEN_BASE_URL || 'http://localhost:11434';
+const QWEN_MODEL    = process.env.QWEN_MODEL    || 'qwen:7b';
+const QWEN_API_KEY  = process.env.QWEN_API_KEY  || '';
+
+async function chat(systemPrompt, history = [], userMessage, opts = {}) {
+  const { maxTokens = 1000, temperature = 0.3 } = opts;
+  const messages = [
+    { role: 'system', content: systemPrompt },
+    ...trimHistory(history),
+    { role: 'user', content: userMessage },
+  ];
+  return QWEN_API_KEY
+    ? callOpenAICompat(messages, { maxTokens, temperature })
+    : callOllama(messages, { maxTokens, temperature });
+}
+
+async function callOllama(messages, { maxTokens, temperature }) {
+  const response = await fetch(`${QWEN_BASE_URL}/api/chat`, {
+    method:  'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      model:   QWEN_MODEL,
+      messages,
+      stream:  false,
+      options: { num_predict: maxTokens, temperature },
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Ollama error ${response.status}: ${text}`);
+  }
+  const data = await response.json();
+  if (!data.message?.content) throw new Error('Ollama returned an empty response.');
+  return data.message.content.trim();
+}
+
+async function callOpenAICompat(messages, { maxTokens, temperature }) {
+  const response = await fetch(`${QWEN_BASE_URL}/v1/chat/completions`, {
+    method:  'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization:  `Bearer ${QWEN_API_KEY}`,
+    },
+    body: JSON.stringify({
+      model:       QWEN_MODEL,
+      messages,
+      max_tokens:  maxTokens,
+      temperature,
+    }),
+  });
+  if (!response.ok) {
+    const text = await response.text().catch(() => '');
+    throw new Error(`Qwen API error ${response.status}: ${text}`);
+  }
+  const data = await response.json();
+  const content = data.choices?.[0]?.message?.content;
+  if (!content) throw new Error('Qwen API returned an empty response.');
+  return content.trim();
+}
+
+function trimHistory(history) {
+  const MAX_CHARS = 8000;
+  let total = 0;
+  const kept = [];
+  for (let i = history.length - 1; i >= 0; i--) {
+    total += (history[i].content || '').length;
+    if (total > MAX_CHARS) break;
+    kept.unshift(history[i]);
+  }
+  return kept;
+}
+
+module.exports = { chat };
+
+
+================================================================
+FILE: src/services/chatbotDataService.js
+================================================================
+
+const supabase = require('../supabaseClient');
+
+const today     = () => new Date().toISOString().split('T')[0];
+const thisMonth = () => new Date().toISOString().slice(0, 7);
+
+function getMonthRange(yearMonth) {
+  const [year, month] = yearMonth.split('-').map(Number);
+  const firstDay = `${yearMonth}-01`;
+  const lastDay  = new Date(year, month, 0).toISOString().split('T')[0];
+  return { firstDay, lastDay };
+}
+
+function parseDateRange(message) {
+  const now      = new Date();
+  const thisYear = now.getFullYear();
+  const msg      = message.toLowerCase();
+
+  if (/last month/i.test(msg)) {
+    const d     = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const year  = d.getFullYear();
+    const month = String(d.getMonth() + 1).padStart(2, '0');
+    return getMonthRange(`${year}-${month}`);
+  }
+  if (/this month/i.test(msg)) return getMonthRange(thisMonth());
+  if (/last week/i.test(msg)) {
+    const day = now.getDay();
+    const start = new Date(now);
+    start.setDate(now.getDate() - day - 7);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return {
+      firstDay: start.toISOString().split('T')[0],
+      lastDay:  end.toISOString().split('T')[0],
+    };
+  }
+  const months = ['january','february','march','april','may','june',
+                  'july','august','september','october','november','december'];
+  for (let i = 0; i < months.length; i++) {
+    if (new RegExp(`\\b${months[i]}\\b`).test(msg)) {
+      const yearMatch = /\b(202\d)\b/.exec(msg);
+      const year = yearMatch ? Number(yearMatch[1]) : thisYear;
+      return getMonthRange(`${year}-${String(i + 1).padStart(2, '0')}`);
+    }
+  }
+  return null;
+}
+
+async function getEmployeeContext(userId) {
+  const month    = thisMonth();
+  const { firstDay, lastDay } = getMonthRange(month);
+  const todayStr = today();
+
+  const [profileResult, attendanceResult, leavesResult, tasksResult, todayResult] =
+    await Promise.allSettled([
+      supabase.from('users')
+        .select('id, name, email, designation, department, join_date, paid_leaves_total, paid_leaves_used, monthly_salary')
+        .eq('id', userId).single(),
+      supabase.from('attendance')
+        .select('date, check_in_time, check_out_time, normal_hours, overtime_hours, total_hours, break_minutes, status')
+        .eq('user_id', userId).gte('date', firstDay).lte('date', lastDay).order('date', { ascending: false }),
+      supabase.from('leaves')
+        .select('type, reason, from_date, to_date, days, status, applied_on')
+        .eq('user_id', userId).order('created_at', { ascending: false }).limit(20),
+      supabase.from('tasks')
+        .select('title, description, priority, status, deadline, completed_at, ext_status')
+        .eq('assigned_to', userId).order('deadline', { ascending: true }),
+      supabase.from('attendance').select('*').eq('user_id', userId).eq('date', todayStr).maybeSingle(),
+    ]);
+
+  const profile    = profileResult.status    === 'fulfilled' ? profileResult.value.data    : null;
+  const attendance = attendanceResult.status === 'fulfilled' ? attendanceResult.value.data  : [];
+  const leaves     = leavesResult.status     === 'fulfilled' ? leavesResult.value.data      : [];
+  const tasks      = tasksResult.status      === 'fulfilled' ? tasksResult.value.data       : [];
+  const todayRec   = todayResult.status      === 'fulfilled' ? todayResult.value.data       : null;
+
+  const records = attendance || [];
+  const summary = {
+    normal_hours:   records.reduce((s, r) => s + Number(r.normal_hours   || 0), 0).toFixed(2),
+    overtime_hours: records.reduce((s, r) => s + Number(r.overtime_hours || 0), 0).toFixed(2),
+    total_hours:    records.reduce((s, r) => s + Number(r.total_hours    || 0), 0).toFixed(2),
+    present_days:   records.filter(r => r.status === 'present').length,
+    absent_days:    records.filter(r => r.status === 'absent').length,
+    leave_days:     records.filter(r => r.status === 'on_leave').length,
+    monthly_target: 180,
+  };
+
+  return {
+    profile,
+    today_attendance:   todayRec,
+    monthly_summary:    summary,
+    attendance_records: records,
+    leaves,
+    tasks,
+    current_month: month,
+    today:         todayStr,
+  };
+}
+
+async function getAdminContext(dateRange = null) {
+  const month    = thisMonth();
+  const range    = dateRange || getMonthRange(month);
+  const { firstDay, lastDay } = range;
+  const todayStr = today();
+
+  const [employeesResult, attendanceTodayResult, attendanceMonthResult,
+         leavesResult, tasksResult, pendingLeavesResult] =
+    await Promise.allSettled([
+      supabase.from('users')
+        .select('id, name, email, designation, department, join_date, role, paid_leaves_total, paid_leaves_used, monthly_salary, is_active')
+        .eq('is_active', true).order('name'),
+      supabase.from('attendance')
+        .select('user_id, date, check_in_time, check_out_time, normal_hours, overtime_hours, total_hours, break_minutes, status, users!attendance_user_id_fkey ( name, designation, department )')
+        .eq('date', todayStr),
+      supabase.from('attendance')
+        .select('user_id, date, normal_hours, overtime_hours, total_hours, status, users!attendance_user_id_fkey ( name, designation )')
+        .gte('date', firstDay).lte('date', lastDay).order('date', { ascending: false }),
+      supabase.from('leaves')
+        .select('type, reason, from_date, to_date, days, status, applied_on, users!leaves_user_id_fkey ( name, designation, department )')
+        .order('created_at', { ascending: false }).limit(50),
+      supabase.from('tasks')
+        .select('title, description, priority, status, deadline, completed_at, ext_status, assignee:users!tasks_assigned_to_fkey ( name, designation ), creator:users!tasks_created_by_fkey ( name, role )')
+        .order('deadline', { ascending: true }),
+      supabase.from('leaves').select('id', { count: 'exact', head: true }).eq('status', 'pending'),
+    ]);
+
+  const employees       = employeesResult.status        === 'fulfilled' ? employeesResult.value.data        : [];
+  const attendanceToday = attendanceTodayResult.status  === 'fulfilled' ? attendanceTodayResult.value.data  : [];
+  const attendanceMonth = attendanceMonthResult.status  === 'fulfilled' ? attendanceMonthResult.value.data  : [];
+  const leaves          = leavesResult.status           === 'fulfilled' ? leavesResult.value.data           : [];
+  const tasks           = tasksResult.status            === 'fulfilled' ? tasksResult.value.data            : [];
+  const pendingLeaves   = pendingLeavesResult.status    === 'fulfilled' ? pendingLeavesResult.value.count    : 0;
+
+  const monthRecords = attendanceMonth || [];
+  const companySummary = {
+    total_normal_hours:   monthRecords.reduce((s, r) => s + Number(r.normal_hours   || 0), 0).toFixed(2),
+    total_overtime_hours: monthRecords.reduce((s, r) => s + Number(r.overtime_hours || 0), 0).toFixed(2),
+    total_hours_worked:   monthRecords.reduce((s, r) => s + Number(r.total_hours    || 0), 0).toFixed(2),
+    total_present_days:   monthRecords.filter(r => r.status === 'present').length,
+    total_absent_days:    monthRecords.filter(r => r.status === 'absent').length,
+    total_leave_days:     monthRecords.filter(r => r.status === 'on_leave').length,
+  };
+
+  const employeeIds  = (employees || []).filter(e => e.role === 'employee').map(e => e.id);
+  const checkedInIds = new Set((attendanceToday || []).map(r => r.user_id));
+  const presentCount = (attendanceToday || []).filter(r => r.status === 'present').length;
+  const absentCount  = employeeIds.filter(id => !checkedInIds.has(id)).length;
+
+  return {
+    employees,
+    today_attendance:  attendanceToday,
+    month_attendance:  attendanceMonth,
+    company_summary:   companySummary,
+    leaves,
+    tasks,
+    pending_leaves:    pendingLeaves || 0,
+    today_summary: {
+      total_employees: employeeIds.length,
+      present:         presentCount,
+      absent:          absentCount,
+    },
+    current_month: month,
+    today:         todayStr,
+  };
+}
+
+async function getEmployeeByNameContext(nameQuery) {
+  const { data: matchedUsers } = await supabase.from('users')
+    .select('id, name, role').eq('is_active', true).eq('role', 'employee')
+    .ilike('name', `%${nameQuery}%`);
+  if (!matchedUsers || matchedUsers.length === 0) return null;
+  return Promise.all(matchedUsers.map(u => getEmployeeContext(u.id)));
+}
+
+module.exports = { getEmployeeContext, getAdminContext, getEmployeeByNameContext, parseDateRange };
+
+
+================================================================
+FILE: src/services/reportService.js
+================================================================
+
+function toCSV(rows, columns, headers) {
+  if (!rows || rows.length === 0) return 'No data available';
+  const headerRow = headers.join(',');
+  const dataRows  = rows.map(row =>
+    columns.map(col => {
+      const val = row[col] ?? '';
+      const str = String(val).replace(/"/g, '""');
+      return str.includes(',') || str.includes('\n') ? `"${str}"` : str;
+    }).join(',')
+  );
+  return [headerRow, ...dataRows].join('\n');
+}
+
+function generateAttendanceCSV(records, title = 'Attendance Report') {
+  const columns = ['employee_name','date','check_in_time','check_out_time','normal_hours','overtime_hours','total_hours','break_minutes','status'];
+  const headers = ['Employee','Date','Check In','Check Out','Normal Hours','Overtime','Total Hours','Break (mins)','Status'];
+  const flat = (records || []).map(r => ({
+    employee_name:  r.users?.name || r.user_name || 'N/A',
+    date:           r.date,
+    check_in_time:  r.check_in_time  ? new Date(r.check_in_time).toLocaleTimeString()  : '-',
+    check_out_time: r.check_out_time ? new Date(r.check_out_time).toLocaleTimeString() : '-',
+    normal_hours:   r.normal_hours   || 0,
+    overtime_hours: r.overtime_hours || 0,
+    total_hours:    r.total_hours    || 0,
+    break_minutes:  r.break_minutes  || 0,
+    status:         r.status         || '-',
+  }));
+  return `${title}\nGenerated: ${new Date().toLocaleString()}\n\n` + toCSV(flat, columns, headers);
+}
+
+function generateLeavesCSV(leaves, title = 'Leave Report') {
+  const columns = ['employee_name','type','from_date','to_date','days','status','reason','applied_on'];
+  const headers = ['Employee','Leave Type','From','To','Days','Status','Reason','Applied On'];
+  const flat = (leaves || []).map(l => ({
+    employee_name: l.users?.name || 'N/A',
+    type: l.type, from_date: l.from_date, to_date: l.to_date,
+    days: l.days, status: l.status, reason: l.reason, applied_on: l.applied_on,
+  }));
+  return `${title}\nGenerated: ${new Date().toLocaleString()}\n\n` + toCSV(flat, columns, headers);
+}
+
+function generateTasksCSV(tasks, title = 'Tasks Report') {
+  const columns = ['title','assigned_to','priority','status','deadline','completed_at','ext_status'];
+  const headers = ['Task','Assigned To','Priority','Status','Deadline','Completed At','Extension Status'];
+  const flat = (tasks || []).map(t => ({
+    title:        t.title,
+    assigned_to:  t.assignee?.name || 'N/A',
+    priority:     t.priority,
+    status:       t.status,
+    deadline:     t.deadline     ? new Date(t.deadline).toLocaleDateString()     : '-',
+    completed_at: t.completed_at ? new Date(t.completed_at).toLocaleDateString() : '-',
+    ext_status:   t.ext_status   || 'none',
+  }));
+  return `${title}\nGenerated: ${new Date().toLocaleString()}\n\n` + toCSV(flat, columns, headers);
+}
+
+module.exports = { generateAttendanceCSV, generateLeavesCSV, generateTasksCSV };
+
+
+================================================================
+FILE: src/controllers/chatbotController.js
+================================================================
+
+const { StateGraph, END }   = require('@langchain/langgraph');
+const { chat }              = require('../services/qwenService');
+const {
+  getEmployeeContext, getAdminContext,
+  getEmployeeByNameContext, parseDateRange,
+}                           = require('../services/chatbotDataService');
+const {
+  generateAttendanceCSV, generateLeavesCSV, generateTasksCSV,
+}                           = require('../services/reportService');
+
+// ── System prompt builder ─────────────────────────────────────
+function buildSystemPrompt(role, data) {
+  const base = `
+You are AttendX Assistant, an AI integrated into AttendX, a Smart Employee Attendance Management System.
+Your purpose is to help users understand their attendance data, leave records, tasks, and working hours.
+
+STRICT RULES:
+1. Only answer questions related to: attendance, working hours, overtime, breaks, leaves, tasks, payroll estimates, and general HR/productivity topics.
+2. If asked anything unrelated, respond: "I can only assist with AttendX-related queries such as attendance, leaves, tasks, and working hours."
+3. Allow general productivity questions (e.g. how to write a leave application, what counts as overtime).
+4. Never reveal raw database IDs or internal system fields.
+5. Be professional, concise, and helpful.
+6. Use markdown tables for multiple rows of data.
+7. Use plain prose for single metrics.
+8. Today's date is: ${data.today || new Date().toISOString().split('T')[0]}.
+9. Current month: ${data.current_month || new Date().toISOString().slice(0, 7)}.
+10. If the user asks for a report/export/download, end your response with exactly this tag on its own line:
+    [REPORT_AVAILABLE:attendance] or [REPORT_AVAILABLE:leaves] or [REPORT_AVAILABLE:tasks]
+`.trim();
+
+  if (role === 'employee') {
+    const { profile, today_attendance, monthly_summary, attendance_records, leaves, tasks } = data;
+    return `${base}
+
+ROLE: EMPLOYEE — only share data about this specific employee. Never reveal other employees' data.
+
+PROFILE:
+- Name: ${profile?.name || 'N/A'} | Designation: ${profile?.designation || 'N/A'} | Department: ${profile?.department || 'N/A'}
+- Join Date: ${profile?.join_date || 'N/A'}
+- Leave Balance: ${(profile?.paid_leaves_total || 0) - (profile?.paid_leaves_used || 0)} days remaining of ${profile?.paid_leaves_total || 15}
+
+TODAY:
+${today_attendance
+  ? `- Status: ${today_attendance.status} | In: ${today_attendance.check_in_time ? new Date(today_attendance.check_in_time).toLocaleTimeString() : 'Not yet'} | Out: ${today_attendance.check_out_time ? new Date(today_attendance.check_out_time).toLocaleTimeString() : 'Not yet'} | Hours: ${today_attendance.total_hours || 0}`
+  : '- Not checked in today'}
+
+THIS MONTH:
+- Normal: ${monthly_summary?.normal_hours || 0}h / 180h target | OT: ${monthly_summary?.overtime_hours || 0}h | Total: ${monthly_summary?.total_hours || 0}h
+- Present: ${monthly_summary?.present_days || 0} | Absent: ${monthly_summary?.absent_days || 0} | Leave: ${monthly_summary?.leave_days || 0}
+
+ATTENDANCE RECORDS:
+${(attendance_records || []).slice(0, 31).map(r =>
+  `${r.date} | ${r.status} | In: ${r.check_in_time ? new Date(r.check_in_time).toLocaleTimeString() : '-'} | Out: ${r.check_out_time ? new Date(r.check_out_time).toLocaleTimeString() : '-'} | ${r.normal_hours}h + ${r.overtime_hours}h OT`
+).join('\n') || 'No records'}
+
+LEAVES:
+${(leaves || []).map(l => `${l.type} | ${l.from_date} to ${l.to_date} | ${l.days} days | ${l.status}`).join('\n') || 'No records'}
+
+TASKS:
+${(tasks || []).map(t => `[${t.priority}] ${t.title} | ${t.status} | Due: ${t.deadline ? new Date(t.deadline).toLocaleDateString() : 'N/A'} | Ext: ${t.ext_status}`).join('\n') || 'No tasks'}
+
+PAYROLL:
+${profile?.monthly_salary
+  ? `- Salary: ₹${profile.monthly_salary} | Hourly: ₹${(profile.monthly_salary / 180).toFixed(2)} | OT Rate: ₹${(profile.monthly_salary / 180 * 1.5).toFixed(2)}/hr
+- Estimated Earned: ₹${((Number(monthly_summary?.normal_hours || 0) * (profile.monthly_salary / 180)) + (Number(monthly_summary?.overtime_hours || 0) * (profile.monthly_salary / 180 * 1.5))).toFixed(2)}`
+  : '- Not available'}`;
+  }
+
+  // Admin / CEO
+  const { employees, today_attendance, company_summary, leaves, tasks, pending_leaves, today_summary } = data;
+  const employeeList = (employees || []).filter(e => e.role === 'employee')
+    .map(e => `- ${e.name} | ${e.designation || 'N/A'} | ${e.department || 'N/A'} | Leaves: ${e.paid_leaves_used}/${e.paid_leaves_total} | Salary: ₹${e.monthly_salary || 'N/A'}`).join('\n');
+  const specificSection = (data.specific_employee_context || []).map(ec =>
+    `\nDETAIL — ${ec.profile?.name}: Normal ${ec.monthly_summary?.normal_hours}h | OT ${ec.monthly_summary?.overtime_hours}h | Present ${ec.monthly_summary?.present_days} | Absent ${ec.monthly_summary?.absent_days} | Leave balance: ${(ec.profile?.paid_leaves_total || 0) - (ec.profile?.paid_leaves_used || 0)} days`
+  ).join('\n');
+
+  return `${base}
+
+ROLE: ${role.toUpperCase()} — full access to all employee data. CEO has no personal attendance/leave tracking.
+
+TODAY (${data.today}):
+- Employees: ${today_summary?.total_employees || 0} | Present: ${today_summary?.present || 0} | Absent: ${today_summary?.absent || 0} | Pending Leaves: ${pending_leaves || 0}
+
+MONTHLY SUMMARY (${data.current_month}):
+- Normal: ${company_summary?.total_normal_hours || 0}h | OT: ${company_summary?.total_overtime_hours || 0}h | Total: ${company_summary?.total_hours_worked || 0}h
+- Present Records: ${company_summary?.total_present_days || 0} | Absent: ${company_summary?.total_absent_days || 0} | Leave: ${company_summary?.total_leave_days || 0}
+
+EMPLOYEES:
+${employeeList || 'None'}
+
+TODAY ATTENDANCE:
+${(today_attendance || []).map(r => `${r.users?.name || 'N/A'} | ${r.status} | In: ${r.check_in_time ? new Date(r.check_in_time).toLocaleTimeString() : '-'} | Out: ${r.check_out_time ? new Date(r.check_out_time).toLocaleTimeString() : '-'} | ${r.normal_hours}h + ${r.overtime_hours}h OT`).join('\n') || 'No records'}
+
+LEAVES (recent 50):
+${(leaves || []).map(l => `${l.users?.name || 'N/A'} | ${l.type} | ${l.from_date} to ${l.to_date} | ${l.days}d | ${l.status}`).join('\n') || 'No records'}
+
+TASKS:
+${(tasks || []).map(t => `[${t.priority}] ${t.title} | ${t.assignee?.name || 'N/A'} | ${t.status} | Due: ${t.deadline ? new Date(t.deadline).toLocaleDateString() : 'N/A'}`).join('\n') || 'No tasks'}
+${specificSection}`;
+}
+
+// ── LangGraph nodes ───────────────────────────────────────────
+const VALID_INTENTS = ['attendance','leave','payroll','tasks','employees','reports','productivity','out_of_scope'];
+const INTENT_SYSTEM = 'You are an intent classifier for an HR system. Classify the message into ONE of: attendance, leave, payroll, tasks, employees, reports, productivity, out_of_scope. Reply with ONLY the intent word.';
+
+async function nodeClassifyIntent(state) {
+  try {
+    const raw    = await chat(INTENT_SYSTEM, [], state.message, { maxTokens: 10, temperature: 0 });
+    const intent = raw.trim().toLowerCase().replace(/[^a-z_]/g, '');
+    return { ...state, intent: VALID_INTENTS.includes(intent) ? intent : 'out_of_scope' };
+  } catch {
+    return { ...state, intent: 'out_of_scope' };
+  }
+}
+
+async function nodeFetchData(state) {
+  const { user, message, intent } = state;
+  const dateRange = parseDateRange(message);
+  let contextData;
+
+  if (user.role === 'employee') {
+    contextData = await getEmployeeContext(user.id);
+  } else {
+    contextData = await getAdminContext(dateRange);
+    const nameMatch = message.match(/(?:about|for|of|show me|details of|report for)\s+([A-Z][a-z]+(?:\s+[A-Z][a-z]+)?)/i);
+    if (nameMatch?.[1]) {
+      const specific = await getEmployeeByNameContext(nameMatch[1]);
+      if (specific?.length > 0) contextData.specific_employee_context = specific;
+    }
+  }
+
+  if (intent === 'productivity') {
+    contextData = { today: contextData.today, current_month: contextData.current_month };
+  }
+
+  return { ...state, contextData };
+}
+
+async function nodeGenerateReply(state) {
+  const { user, message, history, contextData } = state;
+  const systemPrompt = buildSystemPrompt(user.role, contextData);
+  const rawReply = await chat(systemPrompt, history, message, { maxTokens: 1000, temperature: 0.3 });
+  return { ...state, rawReply };
+}
+
+async function nodeBuildReport(state) {
+  const { user, rawReply, contextData } = state;
+  const reportMatch = rawReply.match(/\[REPORT_AVAILABLE:(\w+)\]/);
+  const reportType  = reportMatch ? reportMatch[1] : null;
+  const cleanReply  = rawReply.replace(/\[REPORT_AVAILABLE:\w+\]\n?/g, '').trim();
+  let report = null;
+
+  if (reportType === 'attendance') {
+    const records = user.role === 'employee'
+      ? (contextData.attendance_records || []).map(r => ({ ...r, users: { name: contextData.profile?.name } }))
+      : (contextData.month_attendance || []);
+    report = { type: 'csv', filename: `attendance_report_${contextData.current_month}.csv`, content: generateAttendanceCSV(records, `Attendance Report — ${contextData.current_month}`) };
+  } else if (reportType === 'leaves') {
+    const leaves = user.role === 'employee'
+      ? (contextData.leaves || []).map(l => ({ ...l, users: { name: contextData.profile?.name } }))
+      : (contextData.leaves || []);
+    report = { type: 'csv', filename: `leave_report_${contextData.current_month}.csv`, content: generateLeavesCSV(leaves, `Leave Report — ${contextData.current_month}`) };
+  } else if (reportType === 'tasks') {
+    report = { type: 'csv', filename: `tasks_report_${contextData.today}.csv`, content: generateTasksCSV(contextData.tasks || [], 'Tasks Report') };
+  }
+
+  return { ...state, cleanReply, report };
+}
+
+function nodeBlocked(state) {
+  return { ...state, cleanReply: 'I can only assist with AttendX-related queries such as attendance, leaves, tasks, and working hours.', report: null };
+}
+
+function routeAfterIntent(state) {
+  return state.intent === 'out_of_scope' ? 'blocked' : 'fetchData';
+}
+
+// ── Build graph (once at startup) ─────────────────────────────
+function buildChatGraph() {
+  const initialState = { user: null, message: null, history: [], intent: null, contextData: null, rawReply: null, cleanReply: null, report: null };
+  const graph = new StateGraph({ channels: initialState });
+
+  graph.addNode('classifyIntent', nodeClassifyIntent);
+  graph.addNode('fetchData',      nodeFetchData);
+  graph.addNode('generateReply',  nodeGenerateReply);
+  graph.addNode('buildReport',    nodeBuildReport);
+  graph.addNode('blocked',        nodeBlocked);
+
+  graph.setEntryPoint('classifyIntent');
+  graph.addConditionalEdges('classifyIntent', routeAfterIntent, { fetchData: 'fetchData', blocked: 'blocked' });
+  graph.addEdge('fetchData',     'generateReply');
+  graph.addEdge('generateReply', 'buildReport');
+  graph.addEdge('buildReport',   END);
+  graph.addEdge('blocked',       END);
+
+  return graph.compile();
+}
+
+const chatGraph = buildChatGraph();
+
+// ── POST /api/chatbot/message ──────────────────────────────────
+async function sendMessage(req, res) {
+  try {
+    const { message, history = [] } = req.body;
+    const user = req.user;
+
+    if (!message || typeof message !== 'string' || !message.trim())
+      return res.status(400).json({ error: 'Message is required.' });
+    if (message.trim().length > 1000)
+      return res.status(400).json({ error: 'Message is too long. Maximum 1000 characters.' });
+    if (!Array.isArray(history))
+      return res.status(400).json({ error: 'history must be an array.' });
+
+    const validHistory = history.filter(h => h && typeof h === 'object' && (h.role === 'user' || h.role === 'assistant') && typeof h.content === 'string');
+
+    const finalState = await chatGraph.invoke({
+      user, message: message.trim(), history: validHistory,
+      intent: null, contextData: null, rawReply: null, cleanReply: null, report: null,
+    });
+
+    return res.status(200).json({
+      reply:  finalState.cleanReply || 'I was unable to generate a response. Please try again.',
+      report: finalState.report     || null,
+    });
+  } catch (err) {
+    console.error('[chatbotController]', err);
+    if (err.message?.includes('Ollama error') || err.message?.includes('Qwen API error'))
+      return res.status(500).json({ error: 'AI service error. Please ensure Qwen is running and try again.' });
+    return res.status(500).json({ error: 'Failed to get a response. Please try again.' });
+  }
+}
+
+module.exports = { sendMessage };
+
+
+================================================================
+ADD TO: app.js / server.js
+================================================================
+
+const chatbotRoutes = require('./routes/chatbotRoutes');
+app.use('/api/chatbot', chatbotRoutes);
+
+
+================================================================
+ADD TO: .env
+================================================================
+
+QWEN_BASE_URL=http://localhost:11434
+QWEN_MODEL=qwen:7b

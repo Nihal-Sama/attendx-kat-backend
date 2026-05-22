@@ -17,7 +17,17 @@
 // ============================================================
 const supabase = require('../supabaseClient');
 
-const today = () => new Date().toISOString().split('T')[0];
+// ── FIXED TIMEZONE FUNCTION ───────────────────────────────────
+// Forces the server to evaluate "today" based on Indian Standard Time (IST)
+// using the en-CA locale to natively output the required YYYY-MM-DD format.
+const today = () => {
+  return new Intl.DateTimeFormat('en-CA', { 
+    timeZone: 'Asia/Kolkata',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(new Date());
+};
 
 
 // ── POST /api/screenshots ─────────────────────────────────────
@@ -39,20 +49,29 @@ async function saveScreenshot(req, res) {
     const date       = today();
     const timestamp  = taken_at || new Date().toISOString();
 
-    // Fetch today's attendance record so we can link the screenshot
-    // to the attendance row. Not required — gracefully handled if null.
-    const { data: attendance } = await supabase
+    // ── GHOST SCREENSHOT FIX ──────────────────────────────────
+    // Fetch today's attendance record. If they haven't checked in,
+    // or if they have already checked out, block the screenshot.
+    const { data: attendance, error: fetchError } = await supabase
       .from('attendance')
-      .select('id')
+      .select('id, check_out_time')
       .eq('user_id', userId)
       .eq('date', date)
       .maybeSingle();
+
+    if (fetchError || !attendance) {
+      return res.status(403).json({ error: 'No active check-in found for today. Recording stopped.' });
+    }
+    
+    if (attendance.check_out_time !== null) {
+      return res.status(403).json({ error: 'You are already checked out. Recording stopped.' });
+    }
 
     const { data, error } = await supabase
       .from('screenshots')
       .insert({
         user_id:       userId,
-        attendance_id: attendance?.id || null,
+        attendance_id: attendance.id, // Safely guaranteed to exist now
         url,
         taken_at:      timestamp,
         date,
@@ -73,7 +92,6 @@ async function saveScreenshot(req, res) {
     res.status(500).json({ error: 'Failed to save screenshot.' });
   }
 }
-
 
 // ── GET /api/screenshots ──────────────────────────────────────
 // Admin/CEO fetches screenshots for a specific employee and date.

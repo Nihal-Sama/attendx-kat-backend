@@ -5,7 +5,13 @@ const supabase = require('../supabaseClient');
 const { sumMonthlyTotals, MONTHLY_HOURS_TARGET } = require('../services/hoursService');
 
 const thisMonth = () => new Date().toISOString().slice(0, 7);
-const today     = () => new Date().toISOString().split('T')[0];
+// Fixed — IST based, consistent with screenshotController.js
+const today = () => new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Kolkata',
+  year:     'numeric',
+  month:    '2-digit',
+  day:      '2-digit',
+}).format(new Date());
 
 
 // ── GET /api/dashboard/me ─────────────────────────────────────
