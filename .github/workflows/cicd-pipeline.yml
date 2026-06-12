@@ -24,7 +24,7 @@ jobs:
           cache: 'npm'
 
       - name: Install Dependencies
-        run: npm ci             # 'npm ci' is strictly for automated environments
+        run: npm install             # 'npm ci' is strictly for automated environments
 
       - name: Run Tests
         run: npm test           # Executes your Jest tests
