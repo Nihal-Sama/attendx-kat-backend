@@ -5,7 +5,8 @@
   "main": "src/server.js",
   "scripts": {
     "start": "node src/server.js",
-    "dev": "nodemon src/server.js"
+    "dev": "nodemon src/server.js",
+    "test": "jest --verbose"
   },
   "dependencies": {
     "@google-cloud/vertexai": "^1.12.0",
@@ -23,6 +24,8 @@
     "node-cron": "^3.0.3"
   },
   "devDependencies": {
+    "jest": "^30.4.2",
+    "node-mocks-http": "^1.17.2",
     "nodemon": "^3.1.0"
   },
   "engines": {
